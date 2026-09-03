@@ -12,27 +12,17 @@
   <img src="https://img.shields.io/badge/Vite-7-646CFF?logo=vite&logoColor=white" />
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" />
 </p>
-<p align="center"><strong>当前稳定版本：v2.6.2</strong> | <a href="https://github.com/yukkcat/chatgpt2api/releases/tag/v2.6.2">发布说明</a> | <a href="https://github.com/yukkcat/chatgpt2api/releases">全部版本</a></p>
-
----
-
-## 联系我们
-
-点击链接加入群聊【gemini/gpt-2API 交流群】：
-
-- [https://qm.qq.com/q/yegwCqJisS](https://qm.qq.com/q/yegwCqJisS)
+<p align="center"><strong>当前版本：v2.6.2</strong> | 发布变更见 <a href="CHANGELOG.md">CHANGELOG.md</a></p>
 
 ---
 
 ## 项目定位
 
-本仓库基于原版 [basketikun/chatgpt2api](https://github.com/basketikun/chatgpt2api) 整理维护，核心仍是把 ChatGPT 官网能力封装为 OpenAI 兼容 API。
+本项目基于原版 [basketikun/chatgpt2api](https://github.com/basketikun/chatgpt2api) 整理维护，核心是把 ChatGPT 官网能力封装为 OpenAI 兼容 API，感谢原版作者的贡献。
 
 本版本使用新的 Vue 控制台，主题和交互与原版前端不同；除前端实现差异外，接口、配置和部署口径会尽量保持与原版一致。
 
-在原版基础上，本分支重点扩展了多出口代理组、备用出口、图片链路诊断、对话画图 WebUI、远程账号导入、注册邮箱链路、图片存储管理和搜索/推理强度等能力，目标是在保持 OpenAI 兼容入口的同时，提供更适合自托管、多账号和高并发图片场景的管理体验。
-
-发布仓库只保留主服务、Vue 控制台和必要部署文件；旧版前端、测试文件、临时文档和运行产物不进入发布内容。
+在原版基础上，本仓库重点扩展了多出口代理组、备用出口、图片链路诊断、对话画图 WebUI、远程账号导入、注册邮箱链路、图片存储管理和搜索/推理强度等能力，目标是在保持 OpenAI 兼容入口的同时，提供更适合自托管、多账号和高并发图片场景的管理体验。
 
 ---
 
@@ -100,24 +90,26 @@ flowchart TB
 ### 一键安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yukkcat/chatgpt2api/main/deploy/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/liooktoo288-source/chatgpt2api/main/deploy/install.sh | sudo bash
 ```
 
-固定安装当前稳定版：
+固定安装指定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yukkcat/chatgpt2api/v2.6.2/deploy/install.sh | sudo bash -s -- --branch v2.6.2
+curl -fsSL https://raw.githubusercontent.com/liooktoo288-source/chatgpt2api/v2.6.2/deploy/install.sh | sudo bash -s -- --branch v2.6.2
 ```
 
 ### Docker 运行
 
 ```bash
-git clone https://github.com/yukkcat/chatgpt2api.git
+git clone https://github.com/liooktoo288-source/chatgpt2api.git
 cd chatgpt2api
 cp .env.example .env
 printf '{ "auth-key": "your_secret_key_here" }\n' > config.json
 docker compose up -d
 ```
+
+默认镜像为 `ghcr.io/liooktoo288-source/chatgpt2api:latest`，也可在 `.env` 中通过 `CHATGPT2API_IMAGE` 固定版本标签。如需本地构建镜像：`docker compose build && docker compose up -d`。
 
 启动前请先在 `.env` 中设置 `CHATGPT2API_AUTH_KEY`，也可以继续在 `config.json` 中填写 `auth-key`。
 仓库只保留 `config.example.yaml` 作为配置示例，运行时真实配置文件仍是本地 `config.json`，不要把本地配置提交到仓库。
@@ -153,7 +145,7 @@ docker compose -f docker-compose.warp.yml up -d
 启动后端：
 
 ```bash
-git clone https://github.com/yukkcat/chatgpt2api.git
+git clone https://github.com/liooktoo288-source/chatgpt2api.git
 cd chatgpt2api
 uv sync
 uv run main.py
@@ -507,16 +499,6 @@ curl "http://localhost:8000/v1/editable-file-tasks?task_id=<task_id>" \
 
 </details>
 
-## 社区支持
+## 致谢
 
-学 AI , 上 L 站：[LinuxDO](https://linux.do)
-
-## 原版项目贡献者
-
-<a href="https://github.com/basketikun/chatgpt2api/graphs/contributors">
-  <img alt="Contributors" src="https://contrib.rocks/image?repo=basketikun/chatgpt2api" />
-</a>
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/chart?repos=yukkcat/chatgpt2api&type=date&legend=top-left)](https://www.star-history.com/?repos=yukkcat%2Fchatgpt2api&type=date&legend=top-left)
+本项目基于原版 [basketikun/chatgpt2api](https://github.com/basketikun/chatgpt2api) 开发，感谢原版作者及所有贡献者的工作。
