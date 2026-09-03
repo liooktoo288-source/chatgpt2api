@@ -197,6 +197,7 @@
                   @edit="openEditModal(item)"
                   @toggle-enabled="toggleEnabled(item)"
                   @refresh-token="refreshToken(item.id)"
+                  @relogin="reloginAccount(item.id)"
                   @reset-state="resetAccountState(item.id)"
                   @remove="removeAccount(item.id)"
                 />
@@ -279,6 +280,7 @@
             @edit="openEditModal(item)"
             @toggle-enabled="toggleEnabled(item)"
             @refresh-token="refreshToken(item.id)"
+            @relogin="reloginAccount(item.id)"
             @reset-state="resetAccountState(item.id)"
             @remove="removeAccount(item.id)"
           />
@@ -690,6 +692,49 @@
             </div>
     </ModalShell>
 
+    <ModalShell :open="reloginState.show" max-width="34rem" :z-index="125">
+            <ModalHeader
+              title="重新登录账号"
+              subtitle="在打开的 OpenAI 登录页完成登录，跳转后把地址栏的完整链接（或 code）粘贴到下面。"
+              :close-disabled="reloginState.busy"
+              compact
+              @close="closeReloginModal"
+            />
+
+            <ModalBody density="compact" class="space-y-3">
+              <StateBlock dashed compact>
+                目标账号：{{ reloginState.accountId || '-' }}
+              </StateBlock>
+              <div class="flex flex-wrap justify-end gap-2">
+                <Button size="xs" variant="outline" :disabled="reloginState.busy || !reloginState.authorizeUrl" @click="openReloginAuthorizeUrl">
+                  重新打开登录页
+                </Button>
+              </div>
+              <label class="block text-xs">
+                <span class="ui-field-label">回调链接 / Code</span>
+                <textarea
+                  v-model.trim="reloginState.callback"
+                  rows="4"
+                  class="ui-textarea-sm font-mono"
+                  placeholder="粘贴 http://localhost:1455/auth/callback?code=... 完整链接，或只填 code"
+                  :disabled="reloginState.busy"
+                ></textarea>
+              </label>
+            </ModalBody>
+
+            <ModalFooter :bordered="false">
+              <Button
+                size="xs"
+                variant="primary"
+                root-class="min-w-14 justify-center"
+                :disabled="reloginState.busy || !reloginState.callback.trim()"
+                @click="confirmRelogin"
+              >
+                {{ reloginState.busy ? '登录中...' : '完成登录' }}
+              </Button>
+            </ModalFooter>
+    </ModalShell>
+
     <ModalShell :open="showRefreshProgress" max-width="34rem" :z-index="140">
           <ModalHeader
             :title="refreshProgressTitle || '刷新账号信息和额度'"
@@ -878,6 +923,11 @@ const {
   saveAccount,
   toggleEnabled,
   refreshToken,
+  reloginState,
+  reloginAccount,
+  closeReloginModal,
+  openReloginAuthorizeUrl,
+  confirmRelogin,
   resetAccountState,
   removeAccount,
   runBulkAction,

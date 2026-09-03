@@ -544,6 +544,19 @@ class ConfigStore:
         return bool(value)
 
     @property
+    def auto_relogin_after_refresh(self) -> bool:
+        """自动重新登录异常账号（默认开启）。
+
+        开启后 watcher 会先尝试 force 刷新 refresh_token 救回异常账号，
+        救不回且账号保存了注册密码时尝试 headless 密码登录换新凭证；
+        与 auto_remove_invalid_accounts 同时开启时救回优先。
+        """
+        value = self.data.get("auto_relogin_after_refresh", True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
     def auto_remove_rate_limited_accounts(self) -> bool:
         value = self.data.get("auto_remove_rate_limited_accounts", False)
         if isinstance(value, str):
@@ -631,6 +644,7 @@ class ConfigStore:
             data["image_error_friendly_enabled"] = self.image_error_friendly_enabled
             data["image_error_messages"] = self.get_image_error_messages()
             data["auto_remove_invalid_accounts"] = self.auto_remove_invalid_accounts
+            data["auto_relogin_after_refresh"] = self.auto_relogin_after_refresh
             data["auto_remove_rate_limited_accounts"] = self.auto_remove_rate_limited_accounts
             data["log_levels"] = self.log_levels
             data["sensitive_words"] = self.sensitive_words

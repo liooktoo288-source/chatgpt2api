@@ -125,6 +125,22 @@ def start_limited_account_watcher(stop_event: Event) -> Thread:
                     result = account_service.keepalive_refresh_tokens(keepalive_tokens)
                     if result.get("errors"):
                         print(f"[account-watcher] keepalive errors: {result['errors']}")
+                if config.auto_relogin_after_refresh:
+                    abnormal_tokens = account_service.list_abnormal_tokens()
+                    if abnormal_tokens:
+                        print(f"[account-watcher] auto relogin {len(abnormal_tokens)} abnormal accounts")
+                        rescued = 0
+                        removed = 0
+                        for token in abnormal_tokens:
+                            try:
+                                relogin_result = account_service.auto_relogin_account(token)
+                            except Exception as relogin_exc:
+                                print(f"[account-watcher] auto relogin error: {relogin_exc}")
+                                continue
+                            rescued += 1 if relogin_result.get("ok") and not relogin_result.get("skipped") else 0
+                            removed += 1 if relogin_result.get("removed") else 0
+                        if rescued or removed:
+                            print(f"[account-watcher] auto relogin done: rescued={rescued}, removed={removed}")
             except Exception as exc:
                 print(f"[account-watcher] fail {exc}")
             stop_event.wait(interval_seconds)

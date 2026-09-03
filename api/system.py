@@ -62,6 +62,7 @@ SETTINGS_UPDATE_KEYS = {
     "image_timeout_retry_secs",
     "auto_remove_invalid_accounts",
     "auto_remove_rate_limited_accounts",
+    "auto_relogin_after_refresh",
     "log_levels",
     "global_system_prompt",
     "sensitive_words",

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
++ [新增] 账号管理支持手动重新登录异常账号：OAuth 授权换出凭证后直接替换既有账号三件套，复用 token 轮换与远程预检链路。
++ [新增] 设置页“账号策略”新增“自动重新登录异常账号”开关（默认开启）：watcher 先 force 刷新救回异常账号，救不回且账号保存注册密码时走 headless 密码登录换新凭证；与“自动移除异常账号”同时开启时救回优先，多次救回失败才移除。
+
 ## 2.6.2 - 2026-07-08
 
 + [修复] OpenAI 注册流程 `create_account` 阶段的 `registration_disallowed` 错误，补齐 Turnstile SO Token 生成与双 Sentinel header 发送，对齐官方 SDK 5000ms 采集行为，预计成功率从 0% 提升至 50% 左右。

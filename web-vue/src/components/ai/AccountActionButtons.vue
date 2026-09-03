@@ -45,6 +45,7 @@ const emit = defineEmits<{
   (e: 'edit'): void
   (e: 'toggle-enabled'): void
   (e: 'refresh-token'): void
+  (e: 'relogin'): void
   (e: 'reset-state'): void
   (e: 'remove'): void
 }>()
@@ -60,6 +61,13 @@ const menuItems = computed<ActionMenuItem[]>(() => actionMenuGroups(
       label: props.refreshing ? '刷新中...' : '刷新账号信息和额度',
       disabled: props.refreshing,
     },
+    ...(props.item.backend_status === '异常'
+      ? [{
+          key: 'relogin',
+          label: '重新登录',
+          disabled: props.refreshing,
+        }]
+      : []),
     {
       key: 'reset-state',
       label: props.resetting ? '重置中...' : '重置状态',
@@ -84,6 +92,7 @@ const menuItems = computed<ActionMenuItem[]>(() => actionMenuGroups(
 function handleSelect(key: string) {
   if (key === 'toggle-enabled') emit('toggle-enabled')
   if (key === 'refresh-token') emit('refresh-token')
+  if (key === 'relogin') emit('relogin')
   if (key === 'reset-state') emit('reset-state')
   if (key === 'remove') emit('remove')
 }

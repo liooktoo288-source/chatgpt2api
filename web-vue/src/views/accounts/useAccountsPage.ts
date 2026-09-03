@@ -1,5 +1,6 @@
 ﻿import { computed, onActivated, onMounted, reactive, ref, watch } from 'vue'
 import { accountsApi } from '@/api/accounts'
+import { accountImportsApi } from '@/api/accountImports'
 import { proxyApi } from '@/api/proxy'
 import { normalizeAccountBackendStatus } from '@/api/accounts'
 import { parseProxyReference, serializeProxyReference } from '@/api/proxy'
@@ -1263,6 +1264,88 @@ export function useAccountsPage() {
     }
   }
 
+  const reloginState = reactive({
+    show: false,
+    accountId: '',
+    sessionId: '',
+    authorizeUrl: '',
+    callback: '',
+    busy: false,
+  })
+
+  async function reloginAccount(accountId: string) {
+    const account = accounts.value.find((item) => item.id === accountId)
+    const accessToken = String(account?.access_token || '').trim()
+    if (!accessToken) {
+      toast.warning('当前账号没有可重新登录的 Token')
+      return
+    }
+    const confirmed = await confirmDialog.ask({
+      title: '重新登录账号',
+      message: `即将为账号 ${accountId} 打开 OpenAI 登录页，登录完成后请把浏览器地址栏的回调链接粘贴回来，用新凭证替换当前账号。是否继续？`,
+      confirmText: '开始登录',
+      cancelText: '取消',
+    })
+    if (!confirmed) return
+
+    try {
+      const start = await accountImportsApi.startOAuthLogin(String(account?.email || '').trim())
+      reloginState.accountId = accountId
+      reloginState.sessionId = String(start.session_id || '')
+      reloginState.authorizeUrl = String(start.authorize_url || '')
+      reloginState.callback = ''
+      reloginState.show = true
+      if (reloginState.authorizeUrl) {
+        window.open(reloginState.authorizeUrl, '_blank', 'noopener')
+      }
+    } catch (error) {
+      toast.error(`账号 ${accountId} 发起重新登录失败：${normalizeErrorMessage(error)}`)
+    }
+  }
+
+  function closeReloginModal() {
+    if (reloginState.busy) return
+    reloginState.show = false
+  }
+
+  function openReloginAuthorizeUrl() {
+    if (reloginState.authorizeUrl) {
+      window.open(reloginState.authorizeUrl, '_blank', 'noopener')
+    }
+  }
+
+  async function confirmRelogin() {
+    const callback = reloginState.callback.trim()
+    if (!callback) {
+      toast.warning('请粘贴浏览器地址栏的回调链接或 code')
+      return
+    }
+    const account = accounts.value.find((item) => item.id === reloginState.accountId)
+    const accessToken = String(account?.access_token || '').trim()
+    if (!accessToken) {
+      toast.warning('当前账号没有可重新登录的 Token')
+      return
+    }
+    reloginState.busy = true
+    try {
+      const result = await accountImportsApi.finishOAuthLogin(reloginState.sessionId, callback, accessToken)
+      const errors = Array.isArray(result.errors) ? result.errors : []
+      const first = errors[0]
+      const firstError = typeof first === 'string' ? first : String(first?.error || '')
+      if (Number(result.refreshed || 0) > 0 && !firstError) {
+        toast.success(`账号 ${reloginState.accountId} 重新登录成功`)
+      } else {
+        toast.warning(`账号 ${reloginState.accountId} 凭证已更新，但远程刷新失败${firstError ? `：${firstError}` : ''}`)
+      }
+      reloginState.show = false
+      await loadData({ silentErrorToast: true })
+    } catch (error) {
+      toast.error(`账号 ${reloginState.accountId} 重新登录失败：${normalizeErrorMessage(error)}`)
+    } finally {
+      reloginState.busy = false
+    }
+  }
+
   async function resetAccountState(accountId: string) {
     const confirmed = await confirmDialog.ask({
       title: '重置账号状态',
@@ -1717,6 +1800,11 @@ export function useAccountsPage() {
     saveAccount,
     toggleEnabled,
     refreshToken,
+    reloginState,
+    reloginAccount,
+    closeReloginModal,
+    openReloginAuthorizeUrl,
+    confirmRelogin,
     resetAccountState,
     removeAccount,
     runBulkAction,

@@ -87,10 +87,17 @@ export const accountImportsApi = {
       { email_hint: emailHint },
     ),
 
-  finishOAuthLogin: (sessionId: string, callback: string) =>
-    apiClient.post<{ session_id: string; callback: string }, AccountMutationResponse>(
+  finishOAuthLogin: (sessionId: string, callback: string, reloginAccessToken = '') =>
+    apiClient.post<
+      { session_id: string; callback: string; relogin_access_token?: string },
+      AccountMutationResponse
+    >(
       '/api/accounts/oauth/finish',
-      { session_id: sessionId, callback },
+      {
+        session_id: sessionId,
+        callback,
+        ...(reloginAccessToken ? { relogin_access_token: reloginAccessToken } : {}),
+      },
     ),
 
   listCPAPools: () =>

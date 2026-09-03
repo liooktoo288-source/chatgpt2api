@@ -401,6 +401,12 @@
                     <HelpTip text="只有远程明确确认图片额度为 0 时才会处理，代理错误、断流或上游 429 不会删除账号。" />
                   </div>
                 </div>
+                <div class="settings-check-item">
+                  <div class="settings-check-control">
+                    <Checkbox v-model="localSettings.auto_relogin_after_refresh">自动重新登录异常账号</Checkbox>
+                    <HelpTip text="默认开启。账号被判为异常后，后台会先自动刷新凭证救回；救不回且账号保存了注册密码时，会尝试自动登录换新凭证。与“自动移除异常账号”同时开启时救回优先，多次救回失败才移除。" />
+                  </div>
+                </div>
               </div>
             </FormSection>
 

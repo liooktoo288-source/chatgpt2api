@@ -153,9 +153,14 @@ class OAuthLoginStartRequest(BaseModel):
 
 
 class OAuthLoginFinishRequest(BaseModel):
-    """提交 callback。callback 既可以是完整 URL 也可以只填 code。"""
+    """提交 callback。callback 既可以是完整 URL 也可以只填 code。
+
+    relogin_access_token 可选：提供时表示“给已有账号重新登录”，
+    用换出的新凭证替换该账号的三件套，而不是新增账号。
+    """
     session_id: str = ""
     callback: str = ""
+    relogin_access_token: str = ""
 
 
 def _account_payload_token(item: dict[str, Any]) -> str:
@@ -701,6 +706,23 @@ def create_router() -> APIRouter:
             "id_token": tokens["id_token"],
             "source_type": "oauth_login",
         }
+        relogin_token = str(body.relogin_access_token or "").strip()
+        if relogin_token:
+            resolved = account_service.resolve_access_token(relogin_token)
+            if not resolved or account_service.get_account(resolved) is None:
+                raise HTTPException(status_code=404, detail={"error": "account not found"})
+            relogin_result = await run_in_threadpool(
+                account_service.relogin_account, resolved, payload
+            )
+            error = str(relogin_result.get("error") or "")
+            return {
+                "added": 0,
+                "skipped": 0,
+                "relogin": True,
+                "refreshed": int(relogin_result.get("refreshed") or 0),
+                "errors": [{"token": relogin_result.get("access_token"), "error": error}] if error else [],
+                "items": relogin_result.get("items", []),
+            }
         add_result = await run_in_threadpool(account_service.add_account_items, [payload])
         refresh_result = await run_in_threadpool(
             account_service.refresh_accounts, [tokens["access_token"]]

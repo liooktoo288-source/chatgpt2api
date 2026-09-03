@@ -20,10 +20,10 @@ export const versionApi = {
     const current = await this.current()
     return {
       ...current,
-      repository: 'yukkcat/chatgpt2api',
+      repository: 'liooktoo288-source/chatgpt2api',
       latest_tag: current.tag,
       latest_version: current.version,
-      release_url: 'https://github.com/yukkcat/chatgpt2api/releases',
+      release_url: 'https://github.com/liooktoo288-source/chatgpt2api/releases',
       is_latest: true,
       update_available: false,
     }

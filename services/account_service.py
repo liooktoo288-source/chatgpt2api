@@ -48,6 +48,8 @@ class AccountService:
     _REFRESH_TOKEN_KEEPALIVE_ERROR_BACKOFF_SECONDS = 6 * 60 * 60
     _REFRESH_TOKEN_KEEPALIVE_BATCH_SIZE = 3
     _TOKEN_REFRESH_ERROR_BACKOFF_SECONDS = 5 * 60
+    _AUTO_RELOGIN_MAX_ATTEMPTS = 3
+    _AUTO_RELOGIN_BACKOFF_SECONDS = 30 * 60
     _OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
     _OAUTH_CLIENT_ID = "app_2SKx67EdpoN0G6j64rFvigXD"
     _OAUTH_USER_AGENT = (
@@ -341,6 +343,9 @@ class AccountService:
         normalized["last_token_refresh_at"] = normalized.get("last_token_refresh_at") or None
         normalized["last_token_refresh_error"] = normalized.get("last_token_refresh_error") or None
         normalized["last_token_refresh_error_at"] = normalized.get("last_token_refresh_error_at") or None
+        normalized["relogin_attempts"] = int(normalized.get("relogin_attempts") or 0)
+        normalized["last_relogin_attempt_at"] = normalized.get("last_relogin_attempt_at") or None
+        normalized["last_relogin_error"] = normalized.get("last_relogin_error") or None
         normalized["created_at"] = normalized.get("created_at") or AccountService._now()
         return normalized
 
@@ -513,6 +518,9 @@ class AccountService:
             next_item["last_invalid_at"] = None
             next_item["last_refresh_error"] = None
             next_item["last_refresh_error_at"] = None
+            next_item["relogin_attempts"] = 0
+            next_item["last_relogin_attempt_at"] = None
+            next_item["last_relogin_error"] = None
 
             account = self._normalize_account(next_item)
             if account is None:
@@ -535,6 +543,143 @@ class AccountService:
             {"source": event, "token": anonymize_token(new_token), "rotated": rotated},
         )
         return new_token
+
+    def relogin_account(self, access_token: str, token_data: dict) -> dict[str, Any]:
+        """用重新登录换出的 token 三件套替换既有账号凭证，并立即远程预检。
+
+        覆盖 refresh_token 已失效、账号被判定“异常”后的救回场景：
+        复用 _apply_refreshed_tokens 完成主键轮换/alias 迁移/落盘，再 fetch_remote_info
+        拉取远程状态。预检失败不抛异常（凭证已替换），由返回值携带 error。
+        """
+        resolved = self.resolve_access_token(access_token)
+        if not resolved or self.get_account(resolved) is None:
+            raise ValueError("account not found")
+        new_token = self._apply_refreshed_tokens(resolved, token_data, "relogin_account")
+        self.update_account(new_token, {"status": "正常"}, quiet=True)
+        log_service.add(
+            LOG_TYPE_ACCOUNT,
+            "账号重新登录",
+            {"source": "relogin_account", "token": anonymize_token(new_token)},
+        )
+        try:
+            self.fetch_remote_info(new_token, "relogin_account", remove_invalid=False)
+        except Exception as exc:
+            return {
+                "access_token": new_token,
+                "refreshed": 0,
+                "error": str(exc or ""),
+                "items": self.list_accounts(),
+            }
+        return {
+            "access_token": new_token,
+            "refreshed": 1,
+            "error": "",
+            "items": self.list_accounts(),
+        }
+
+    def _record_relogin_attempt(self, access_token: str, error: str = "") -> int:
+        """记录一次自动重登尝试，返回累计尝试次数。"""
+        now = datetime.now(timezone.utc).isoformat()
+        attempts = 0
+        with self._lock:
+            resolved = self._resolve_access_token_locked(access_token)
+            current = self._accounts.get(resolved)
+            if current is None:
+                return 0
+            next_item = dict(current)
+            attempts = int(next_item.get("relogin_attempts") or 0) + 1
+            next_item["relogin_attempts"] = attempts
+            next_item["last_relogin_attempt_at"] = now
+            if error:
+                next_item["last_relogin_error"] = str(error)
+            account = self._normalize_account(next_item)
+            if account is not None:
+                self._accounts[resolved] = account
+                self._save_accounts()
+        return attempts
+
+    def auto_relogin_account(self, access_token: str) -> dict[str, Any]:
+        """watcher 用：自动救回“异常”账号（auto_relogin_after_refresh 开启时）。
+
+        顺序：先 force 刷新 refresh_token；仍无效且账号保存了注册密码时，
+        走 headless 密码登录换新三件套（复用 relogin_account 落库）。
+        每个账号按 _AUTO_RELOGIN_BACKOFF_SECONDS 退避；累计 _AUTO_RELOGIN_MAX_ATTEMPTS
+        次仍失败且 auto_remove_invalid_accounts 开启时删除账号。
+        """
+        resolved = self.resolve_access_token(access_token)
+        account = self.get_account(resolved)
+        if not account:
+            return {"ok": False, "skipped": True, "removed": False, "error": "account not found"}
+        if str(account.get("status") or "") != "异常":
+            return {"ok": True, "skipped": True, "removed": False, "error": ""}
+
+        last_attempt = self._parse_time(account.get("last_relogin_attempt_at"))
+        if last_attempt is not None:
+            elapsed = (datetime.now(timezone.utc) - last_attempt).total_seconds()
+            if elapsed < self._AUTO_RELOGIN_BACKOFF_SECONDS:
+                return {"ok": False, "skipped": True, "removed": False, "error": "backoff"}
+
+        email = str(account.get("email") or "").strip()
+        password = str(account.get("password") or "").strip()
+        proxy = str(account.get("proxy") or "").strip()
+        error = ""
+
+        # 1) force 刷新 refresh_token 救回
+        active_token = self.refresh_access_token(resolved, force=True, event="auto_relogin")
+        try:
+            self.fetch_remote_info(active_token, "auto_relogin", remove_invalid=False)
+            rescued = self.get_account(active_token)
+            if rescued and str(rescued.get("status") or "") != "异常":
+                log_service.add(
+                    LOG_TYPE_ACCOUNT,
+                    "自动重登救回账号（refresh_token 刷新）",
+                    {"token": anonymize_token(active_token)},
+                )
+                self.update_account(active_token, {
+                    "relogin_attempts": 0,
+                    "last_relogin_attempt_at": None,
+                    "last_relogin_error": None,
+                }, quiet=True)
+                return {"ok": True, "skipped": False, "removed": False, "error": ""}
+        except Exception as exc:
+            error = str(exc or "")
+
+        # 2) headless 密码登录换新凭证
+        if email and password:
+            try:
+                from services.register.openai_register import login_account_with_password
+                token_data = login_account_with_password(email, password, proxy=proxy)
+                relogin_result = self.relogin_account(resolved, token_data)
+                if not relogin_result.get("error"):
+                    log_service.add(
+                        LOG_TYPE_ACCOUNT,
+                        "自动重登救回账号（headless 密码登录）",
+                        {"token": anonymize_token(str(relogin_result.get("access_token") or "")), "email": email},
+                    )
+                    return {"ok": True, "skipped": False, "removed": False, "error": ""}
+                error = str(relogin_result.get("error") or error)
+            except Exception as exc:
+                error = str(exc or "")
+        elif not error:
+            error = "账号没有可用于自动登录的邮箱和密码"
+
+        resolved_now = self.resolve_access_token(resolved) or resolved
+        attempts = self._record_relogin_attempt(resolved_now, error)
+        removed = False
+        if attempts >= self._AUTO_RELOGIN_MAX_ATTEMPTS and config.auto_remove_invalid_accounts:
+            removed = bool(self.delete_accounts([resolved_now], return_items=False)["removed"])
+            if removed:
+                log_service.add(
+                    LOG_TYPE_ACCOUNT,
+                    "自动重登多次失败，按策略移除异常账号",
+                    {"token": anonymize_token(resolved_now), "attempts": attempts, "error": error},
+                )
+        log_service.add(
+            LOG_TYPE_ACCOUNT,
+            "自动重登失败",
+            {"token": anonymize_token(resolved_now), "attempts": attempts, "error": error},
+        )
+        return {"ok": False, "skipped": False, "removed": removed, "error": error}
 
     def refresh_access_token(self, access_token: str, *, force: bool = False, event: str = "refresh_access_token") -> str:
         if not access_token:
@@ -842,9 +987,13 @@ class AccountService:
         """统一处理鉴权异常账号。
 
         口径固定为：先记录异常，再按“自动移除异常账号”配置删除或保留异常状态。
+        “自动重新登录异常账号”开启时救回优先：先保留异常状态交给 watcher 救回，
+        救回多次失败后由 auto_relogin_account 按配置补删除。
         """
         self._record_invalid_token_seen(access_token, event, str(error or "invalid access token"))
-        should_remove = config.auto_remove_invalid_accounts if remove is None else remove
+        should_remove = (
+            config.auto_remove_invalid_accounts and not config.auto_relogin_after_refresh
+        ) if remove is None else remove
         if not should_remove:
             return False
         removed = bool(self.delete_accounts([access_token], return_items=False)["removed"])
@@ -884,6 +1033,15 @@ class AccountService:
                 token
                 for item in self._accounts.values()
                 if item.get("status") == "限流"
+                   and (token := item.get("access_token") or "")
+            ]
+
+    def list_abnormal_tokens(self) -> list[str]:
+        with self._lock:
+            return [
+                token
+                for item in self._accounts.values()
+                if item.get("status") == "异常"
                    and (token := item.get("access_token") or "")
             ]
 

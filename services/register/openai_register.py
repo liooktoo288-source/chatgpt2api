@@ -974,6 +974,72 @@ class PlatformRegistrar:
         step(index, "Microsoft passwordless token 换取完成")
         return tokens
 
+    def _verify_password(self, password: str, index: int) -> str:
+        """密码登录分支：authorize/continue 之后提交密码，返回 continue_url。"""
+        step(index, "开始提交登录密码")
+        url = f"{auth_base}/api/accounts/password/verify"
+
+        def send():
+            headers = self._json_headers(f"{auth_base}/log-in/password")
+            headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "password_verify", self.fingerprint)
+            headers = _headers_with_clearance(headers, url, self.proxy, self.clearance_user_agent)
+            return request_with_local_retry(
+                self.session,
+                "post",
+                url,
+                json={"password": password},
+                headers=headers,
+                allow_redirects=False,
+                verify=False,
+            )
+
+        resp, error = send()
+        if _is_cloudflare_challenge(resp):
+            bundle = self._refresh_cloudflare_clearance(auth_base, index)
+            if bundle is None:
+                raise RuntimeError(_cloudflare_block_message(resp, reason=self.clearance_failure_reason))
+            resp, error = send()
+            if _is_cloudflare_challenge(resp):
+                raise RuntimeError(_cloudflare_block_message(resp, "Cloudflare clearance 重试仍被拦截"))
+        if resp is None or resp.status_code != 200:
+            detail = _response_json(resp) if resp is not None else {}
+            raise RuntimeError(error or f"password_verify_http_{getattr(resp, 'status_code', 'unknown')}, detail={json.dumps(detail, ensure_ascii=False)[:300]}")
+        data = _response_json(resp)
+        continue_url = str(data.get("continue_url") or "").strip() or f"{auth_base}/sign-in-with-chatgpt/platform/consent"
+        step(index, "提交登录密码完成")
+        return continue_url
+
+    def login_with_password(self, email: str, password: str, index: int = 0) -> dict:
+        """headless 邮箱+密码登录，返回 token 三件套。供异常账号自动重登使用。"""
+        email = str(email or "").strip()
+        password = str(password or "")
+        if not email or not password:
+            raise RuntimeError("缺少邮箱或密码，无法自动登录")
+        self._platform_authorize(email, index, screen_hint="login_or_signup")
+        self._authorize_continue_login(email, index)
+        continue_url = self._verify_password(password, index)
+        step(index, "密码登录验证完成，开始换 token")
+        exchange_errors: list[str] = []
+        tokens = exchange_tokens_from_continue_url(
+            self.session,
+            self.device_id,
+            self.code_verifier,
+            continue_url,
+            self.proxy,
+            self.clearance_user_agent,
+            exchange_errors,
+            self.fingerprint,
+        )
+        if not tokens:
+            detail = "；".join(exchange_errors[-4:]) if exchange_errors else "未返回 token"
+            raise RuntimeError(f"密码登录 token 换取失败: {detail}")
+        step(index, "密码登录 token 换取完成")
+        return {
+            "access_token": str(tokens.get("access_token") or "").strip(),
+            "refresh_token": str(tokens.get("refresh_token") or "").strip(),
+            "id_token": str(tokens.get("id_token") or "").strip(),
+        }
+
     def _register_user(self, email: str, password: str, index: int) -> None:
         step(index, "开始提交注册密码")
         url = f"{auth_base}/api/accounts/user/register"
@@ -1145,6 +1211,18 @@ class PlatformRegistrar:
             "source_type": source_type,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+
+
+def login_account_with_password(email: str, password: str, proxy: str = "") -> dict:
+    """headless 邮箱+密码登录，返回 {"access_token","refresh_token","id_token"}。
+
+    供“自动重新登录异常账号”使用（services.account_service.auto_relogin_account）。
+    """
+    registrar = PlatformRegistrar(proxy)
+    try:
+        return registrar.login_with_password(email, password, index=0)
+    finally:
+        registrar.close()
 
 
 def worker(index: int) -> dict:

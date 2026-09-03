@@ -250,6 +250,7 @@ environment:
 | `image_error_friendly_enabled` | `false` | 开启后对图片错误返回友好文案；关闭时尽量保留原始错误。 |
 | `auto_remove_invalid_accounts` | `true` | 鉴权失效账号是否自动移除。 |
 | `auto_remove_rate_limited_accounts` | `false` | 远程确认图片额度耗尽后是否自动移除账号。 |
+| `auto_relogin_after_refresh` | `true` | 账号判为异常后自动救回：先刷新凭证，救不回且保存了注册密码时尝试自动登录换新凭证；与自动移除同时开启时救回优先。 |
 | `log_retention_days` | `30` | 调用日志自动清理天数。 |
 | `proxy_runtime` | 关闭 | 稳定代理运行时和 Cloudflare clearance 配置。 |
 
