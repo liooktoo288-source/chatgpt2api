@@ -754,7 +754,7 @@ const themeMode = ref<ThemeMode>(getStoredThemeMode())
 type RouteProgressPhase = 'idle' | 'running' | 'finishing'
 const pendingNavigationPath = ref('')
 const routeProgressPhase = ref<RouteProgressPhase>('idle')
-const cachedRouteNames = ['Dashboard', 'Studio', 'Accounts', 'Logs', 'Monitor', 'Gallery', 'Proxy', 'Settings']
+const cachedRouteNames = ['Dashboard', 'Studio', 'Accounts', 'Logs', 'Monitor', 'Gallery', 'Proxy', 'Register', 'Settings']
 const cachedRouteMax = cachedRouteNames.length
 const themeOptions: { label: string; value: ThemeMode }[] = [
   { label: '浅色', value: 'light' },
@@ -805,6 +805,12 @@ const menuItems: NavigationItem[] = [
     capability: 'admin_console',
   },
   {
+    path: '/register',
+    label: '注册账号',
+    icon: 'M7 3h10a2 2 0 0 1 2 2v3h-2V5H7v14h10v-3h2v3a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm8.6 5.4L20.2 13l-4.6 4.6-1.4-1.4 2.2-2.2H9v-2h7.4l-2.2-2.2 1.4-1.4z',
+    capability: 'admin_console',
+  },
+  {
     path: '/logs',
     label: '日志管理',
     icon: 'M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h10v2H4v-2z',
@@ -836,6 +842,7 @@ const routeTitleMap: Record<string, string> = {
   logs: '日志管理',
   gallery: '图片管理',
   proxy: '代理管理',
+  register: '注册账号',
   settings: '系统设置',
   monitor: '实时监控',
   studio: '对话画图',
@@ -1044,6 +1051,7 @@ const routeViewLoaders: Record<string, () => Promise<unknown>> = {
   '/gallery': () => import('@/views/Gallery.vue'),
   '/monitor': () => import('@/views/Monitor.vue'),
   '/proxy': () => import('@/views/Proxy.vue'),
+  '/register': () => import('@/views/Register.vue'),
   '/settings': () => import('@/views/Settings.vue'),
   '/studio': () => import('@/views/Studio.vue'),
 }

@@ -520,6 +520,8 @@ class BackupService:
                 database_name,
                 self._application_database_backup(database_backend),
             )
+            if include.get("register"):
+                self._add_file_to_archive(archive, DATA_DIR / "register.json", "data/register.json")
             if include.get("image_tasks"):
                 self._add_file_to_archive(archive, DATA_DIR / "image_tasks.json", "data/image_tasks.json")
                 self._add_file_to_archive(archive, IMAGE_INDEX_FILE, "data/image_index.json")

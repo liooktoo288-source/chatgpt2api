@@ -53,6 +53,7 @@ const settingsOptionLabels: Record<string, Record<string, string>> = {
     both: '本地 + WebDAV',
   },
   'backup.include': {
+    register: '注册配置',
     image_tasks: '图片任务记录',
     editable_files: 'PPT / PSD 文件',
     images: '图片文件目录',

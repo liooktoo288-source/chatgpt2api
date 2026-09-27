@@ -34,6 +34,7 @@ _REMOVED_TOP_LEVEL_SETTINGS = (
 )
 
 DEFAULT_BACKUP_INCLUDE = {
+    "register": True,
     "image_tasks": True,
     "editable_files": True,
     "images": False,
@@ -130,7 +131,6 @@ def _normalize_positive_int(value: object, default: int, minimum: int = 0) -> in
 def _normalize_backup_include(value: object) -> dict[str, object]:
     source = value if isinstance(value, dict) else {}
     normalized = copy.deepcopy(source)
-    normalized.pop("register", None)
     for key, default in DEFAULT_BACKUP_INCLUDE.items():
         normalized[key] = _normalize_bool(source.get(key), default)
     return normalized

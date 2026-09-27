@@ -130,6 +130,25 @@ export interface ProxyNodeImportResult {
 
 export type { ClearanceTestResult, ProxyRuntimeSettings, ProxyRuntimeStatus }
 
+export interface LegacyProxyReference {
+  mode: LegacyProxyReferenceMode
+  value: string
+}
+
+export function parseProxyReference(value: unknown): LegacyProxyReference {
+  const raw = String(value || '').trim()
+  const lower = raw.toLowerCase()
+  if (!raw) return { mode: 'global', value: '' }
+  if (lower === 'direct') return { mode: 'direct', value: '' }
+  if (lower.startsWith('profile:')) {
+    return { mode: 'profile', value: raw.slice('profile:'.length).trim() }
+  }
+  if (lower.startsWith('group:')) {
+    return { mode: 'group', value: raw.slice('group:'.length).trim() }
+  }
+  return { mode: 'custom', value: raw }
+}
+
 export function serializeProxyReference(mode: LegacyProxyReferenceMode, value = ''): string {
   const raw = String(value || '').trim()
   if (mode === 'global') return ''

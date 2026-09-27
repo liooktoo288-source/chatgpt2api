@@ -91,6 +91,7 @@ class GenBoxPushPatch(_GenBoxPushFields):
 
 
 class BackupIncludeSettings(_StrictModel):
+    register_: bool = Field(default=True, alias="register")
     image_tasks: bool = True
     editable_files: bool = True
     images: bool = False
