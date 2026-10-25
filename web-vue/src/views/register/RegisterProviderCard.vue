@@ -314,7 +314,7 @@
           <div class="register-form-grid register-form-grid--two">
             <label class="register-checkbox-field">
               <Checkbox
-                :model-value="provider.dot !== false"
+                :model-value="provider.dot !== false && !tempTfOnlyEdu"
                 :disabled="disabled || tempTfOnlyEdu"
                 @update:model-value="value => emit('update-field', index, 'dot', Boolean(value))"
               >
@@ -323,7 +323,7 @@
             </label>
             <label class="register-checkbox-field">
               <Checkbox
-                :model-value="provider.plus !== false"
+                :model-value="provider.plus !== false && !tempTfOnlyEdu"
                 :disabled="disabled || tempTfOnlyEdu"
                 @update:model-value="value => emit('update-field', index, 'plus', Boolean(value))"
               >
