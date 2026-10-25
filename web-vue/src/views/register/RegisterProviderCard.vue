@@ -291,6 +291,47 @@
       </p>
     </div>
 
+    <div v-if="currentType === 'temp_tf'" class="register-provider-section register-provider-section--soft">
+      <div class="register-provider-section-title">temp.tf 配置</div>
+      <div class="register-provider-stack">
+        <label class="register-field">
+          <span class="register-label">邮件提供商</span>
+          <textarea
+            class="register-textarea"
+            :disabled="disabled"
+            placeholder="outlook, hotmail, gmail, high.edu.pl"
+            :value="arrayText(provider.providers)"
+            @input="emit('update-array', index, 'providers', ($event.target as HTMLTextAreaElement).value)"
+          ></textarea>
+        </label>
+
+        <div class="register-form-grid register-form-grid--two">
+          <label class="register-checkbox-field">
+            <Checkbox
+              :model-value="provider.dot !== false"
+              :disabled="disabled"
+              @update:model-value="value => emit('update-field', index, 'dot', Boolean(value))"
+            >
+              Dot 别名（仅 Gmail）
+            </Checkbox>
+          </label>
+          <label class="register-checkbox-field">
+            <Checkbox
+              :model-value="provider.plus !== false"
+              :disabled="disabled"
+              @update:model-value="value => emit('update-field', index, 'plus', Boolean(value))"
+            >
+              Plus 别名
+            </Checkbox>
+          </label>
+        </div>
+
+        <p class="register-preview-line">
+          每行或用逗号分隔一个提供商：outlook、hotmail、gmail、high.edu.pl；仅选 high.edu.pl 时会自动关闭 Dot/Plus。
+        </p>
+      </div>
+    </div>
+
     <div v-if="currentType === 'gptmail'" class="register-provider-section register-provider-section--soft">
       <div class="register-provider-section-title">GPTMail 额度</div>
       <div class="register-gptmail-panel">
@@ -537,7 +578,7 @@ import {
 } from '@/views/register/registerProviderView'
 
 type MetaChipTone = 'default' | 'muted' | 'success' | 'warning' | 'danger' | 'info'
-type ProviderArrayKey = 'domain' | 'subdomain'
+type ProviderArrayKey = 'domain' | 'subdomain' | 'providers'
 
 type GptMailUiRuntime = {
   statusByIndex: (index: number) => GptMailStatus | null | undefined
