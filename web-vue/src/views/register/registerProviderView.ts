@@ -40,6 +40,7 @@ export const providerTypeOptions = [
   { value: 'inbucket', label: 'Inbucket' },
   { value: 'duckmail', label: 'DuckMail' },
   { value: 'gptmail', label: 'GPTMail' },
+  { value: 'gptmail_web', label: 'GPTMail 网页直取（免 Key）' },
   { value: 'donemail', label: 'DoneMail' },
   { value: 'yyds_mail', label: 'YYDS Mail' },
   { value: 'ddg_mail', label: 'DDG + CF 收件箱' },
@@ -99,6 +100,7 @@ export const providerTypeKeys: Record<string, string[]> = {
   inbucket: ['api_base', 'domain', 'random_subdomain'],
   duckmail: ['api_key', 'default_domain'],
   gptmail: ['key_mode', 'api_key', 'default_domain', 'local_compose'],
+  gptmail_web: ['api_base', 'domain', 'email_prefix'],
   donemail: ['api_base', 'admin_key', 'domain', 'email_prefix', 'message_limit'],
   yyds_mail: ['api_base', 'api_key', 'domain', 'subdomain', 'wildcard'],
   ddg_mail: ['api_base', 'ddg_token', 'cf_inbox_jwt', 'admin_password', 'cf_api_key', 'cf_auth_mode', 'cf_create_path', 'cf_messages_path'],
@@ -168,6 +170,8 @@ export function defaultProvider(type = 'cloudmail_gen'): RegisterProvider {
       return { ...base, api_key: '', default_domain: 'duckmail.sbs' }
     case 'gptmail':
       return { ...base, key_mode: 'public', api_key: '', default_domain: '', local_compose: false }
+    case 'gptmail_web':
+      return { ...base, api_base: 'https://mail.chatgpt.org.uk', domain: [], email_prefix: '' }
     case 'donemail':
       return { ...base, api_base: '', admin_key: '', domain: [], email_prefix: '', message_limit: 20 }
     case 'yyds_mail':
@@ -474,7 +478,7 @@ export function providerRequirementMessages(provider: RegisterProvider) {
 }
 
 export function providerUsesApiBase(provider: RegisterProvider) {
-  return ['cloudmail_gen', 'cloudflare_temp_email', 'moemail', 'inbucket', 'yyds_mail', 'ddg_mail', 'donemail'].includes(providerType(provider))
+  return ['cloudmail_gen', 'cloudflare_temp_email', 'moemail', 'inbucket', 'yyds_mail', 'ddg_mail', 'donemail', 'gptmail_web'].includes(providerType(provider))
 }
 
 export function providerUsesApiKey(provider: RegisterProvider) {
@@ -490,7 +494,7 @@ export function providerUsesDefaultDomain(provider: RegisterProvider) {
 }
 
 export function providerUsesDomainList(provider: RegisterProvider) {
-  return ['cloudmail_gen', 'tempmail_lol', 'cloudflare_temp_email', 'moemail', 'inbucket', 'yyds_mail', 'donemail'].includes(providerType(provider))
+  return ['cloudmail_gen', 'tempmail_lol', 'cloudflare_temp_email', 'moemail', 'inbucket', 'yyds_mail', 'donemail', 'gptmail_web'].includes(providerType(provider))
 }
 
 export function apiBaseLabel(provider: RegisterProvider) {
@@ -498,6 +502,7 @@ export function apiBaseLabel(provider: RegisterProvider) {
   if (type === 'cloudmail_gen') return 'CloudMail URL'
   if (type === 'ddg_mail') return 'CF API Base'
   if (type === 'donemail') return 'DoneMail URL'
+  if (type === 'gptmail_web') return '站点地址'
   return 'API Base'
 }
 
@@ -505,6 +510,7 @@ export function apiBasePlaceholder(provider: RegisterProvider) {
   const type = providerType(provider)
   if (type === 'donemail') return 'https://sow.us.kg'
   if (type === 'yyds_mail') return 'https://maliapi.215.im/v1'
+  if (type === 'gptmail_web') return 'https://mail.chatgpt.org.uk'
   return ''
 }
 
@@ -524,6 +530,7 @@ export function domainPlaceholder(provider: RegisterProvider) {
   if (type === 'tempmail_lol') return '每行一个域名，可留空使用服务默认'
   if (type === 'yyds_mail') return '每行一个域名，可留空'
   if (type === 'donemail') return '每行一个 DoneMail 已接收域名'
+  if (type === 'gptmail_web') return '每行一个域名，可留空自动获取站点当前可用域名'
   return '每行一个域名'
 }
 

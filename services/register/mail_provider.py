@@ -12,6 +12,7 @@ from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
 from threading import Lock
 from typing import Any, Callable, TypeVar
+from urllib.parse import quote
 
 from curl_cffi import requests
 
@@ -294,6 +295,11 @@ GPTMAIL_DEFAULT_API_BASE = "https://mail.chatgpt.org.uk"
 GPTMAIL_PUBLIC_STATUS_CACHE_SECONDS = 60
 GPTMAIL_CUSTOM_STATUS_CACHE_SECONDS = 30
 
+GPTMAIL_WEB_DEFAULT_API_BASE = "https://mail.chatgpt.org.uk"
+GPTMAIL_WEB_DOMAIN_CACHE_SECONDS = 300
+gptmail_web_domain_lock = Lock()
+gptmail_web_domain_cache: dict[str, tuple[float, list[str]]] = {}
+
 
 def _config(mail_config: dict) -> dict:
     return {
@@ -357,6 +363,11 @@ def _is_proxy_tunnel_error(exc: Exception) -> bool:
 def _gptmail_api_base(entry: dict) -> str:
     value = str(entry.get("api_base") or "").strip()
     return (value or GPTMAIL_DEFAULT_API_BASE).rstrip("/")
+
+
+def _gptmail_web_api_base(entry: dict) -> str:
+    value = str(entry.get("api_base") or "").strip()
+    return (value or GPTMAIL_WEB_DEFAULT_API_BASE).rstrip("/")
 
 
 def _gptmail_key_mode(entry: dict) -> str:
@@ -1209,6 +1220,347 @@ class GptMailProvider(BaseMailProvider):
         if item.get("id"):
             item = self._request("GET", f"/api/email/{item['id']}")
         return {"provider": self.name, "mailbox": mailbox["address"], "message_id": str(item.get("id") or ""), "subject": str(item.get("subject") or ""), "sender": str(item.get("from_address") or ""), "text_content": str(item.get("content") or ""), "html_content": str(item.get("html_content") or ""), "received_at": _parse_received_at(item.get("timestamp") or item.get("created_at")), "raw": item}
+
+    def close(self) -> None:
+        self.session.close()
+
+
+class GptMailWebHttpError(RuntimeError):
+    """GPTMail 网页端 HTTP 接口返回非预期状态码。"""
+
+    def __init__(self, status_code: int, path: str, body: str):
+        detail = str(body or "").strip()[:300]
+        super().__init__(f"GPTMail 网页直取请求失败: {path}, HTTP {status_code}, body={detail}")
+        self.status_code = int(status_code)
+        self.path = path
+        self.body = str(body or "")
+
+
+class GptMailWebProvider(BaseMailProvider):
+    """通过 GPTMail 网页端 HTTP 链路取信，不依赖官方 API Key。
+
+    与浏览器打开收件箱时的请求顺序一致：
+    1. POST /api/browser-verification 获取浏览器验证 Cookie；
+    2. POST /api/inbox-token 换取 X-Inbox-Token；
+    3. GET /api/emails 轮询邮件列表，GET /api/email/{id} 读取正文。
+    域名默认从 /api/domains/public 自动获取，也可以在 provider.domain 中手动指定。
+    """
+
+    name = "gptmail_web"
+
+    def __init__(self, entry: dict, conf: dict):
+        super().__init__(conf, str(entry.get("provider_ref") or ""))
+        self.api_base = _gptmail_web_api_base(entry)
+        self.domain = _normalize_string_list(entry.get("domain") or entry.get("default_domain"))
+        self.email_prefix = str(entry.get("email_prefix") or "").strip()
+        self.session = _create_session(conf)
+        self.session.headers.update({
+            "User-Agent": conf["user_agent"],
+            "Accept": "application/json",
+            "Origin": self.api_base,
+            "Referer": f"{self.api_base}/",
+        })
+        self._browser_verified = False
+        self._resolved_domains: list[str] = []
+        self._detail_cache: dict[str, dict[str, Any]] = {}
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        payload: dict | None = None,
+        headers: dict | None = None,
+        expected: tuple[int, ...] = (200,),
+        retry_verification: bool = True,
+    ) -> dict[str, Any]:
+        resp = self.session.request(
+            method.upper(),
+            f"{self.api_base}{path}",
+            headers=headers or None,
+            params=params,
+            json=payload,
+            timeout=self.conf["request_timeout"],
+            verify=False,
+        )
+        if resp.status_code == 428 and retry_verification:
+            self._browser_verify(force=True)
+            return self._request(
+                method,
+                path,
+                params=params,
+                payload=payload,
+                headers=headers,
+                expected=expected,
+                retry_verification=False,
+            )
+        if resp.status_code not in expected:
+            raise GptMailWebHttpError(resp.status_code, path, resp.text)
+        if resp.status_code == 204 or not resp.content:
+            return {}
+        try:
+            data = resp.json()
+        except Exception as exc:
+            raise RuntimeError(f"GPTMail 网页直取返回非 JSON: {method} {path}, body={resp.text[:300]}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"GPTMail 网页直取返回结构不是对象: {method} {path}")
+        return data
+
+    def _browser_verify(self, *, force: bool = False) -> None:
+        if self._browser_verified and not force:
+            return
+        data = self._request(
+            "POST",
+            "/api/browser-verification",
+            payload={},
+            expected=(200,),
+            retry_verification=False,
+        )
+        if not data.get("success"):
+            raise RuntimeError(f"GPTMail 网页直取浏览器验证失败: {data.get('error') or data}")
+        self._browser_verified = True
+
+    def _public_domains(self, *, force: bool = False) -> list[str]:
+        now = time.time()
+        cache_key = self.api_base
+        if not force:
+            with gptmail_web_domain_lock:
+                cached = gptmail_web_domain_cache.get(cache_key)
+                if cached and now < cached[0]:
+                    return list(cached[1])
+        data = self._request("GET", "/api/domains/public", params={"view": "bootstrap"}, expected=(200,))
+        if not data.get("success"):
+            raise RuntimeError(f"GPTMail 网页直取获取域名失败: {data.get('error') or data}")
+        rows = (data.get("data") or {}).get("domains") if isinstance(data.get("data"), dict) else None
+        domains: list[str] = []
+        for item in rows if isinstance(rows, list) else []:
+            if not isinstance(item, dict):
+                continue
+            domain = str(item.get("domain_name") or item.get("domain") or "").strip().lower()
+            if not domain or not _normalize_bool(item.get("is_active"), True):
+                continue
+            visibility = str(item.get("visibility") or "public").strip().lower()
+            if visibility and visibility != "public":
+                continue
+            if domain not in domains:
+                domains.append(domain)
+        if not domains:
+            raise RuntimeError("GPTMail 网页直取没有获取到可用域名，请手动填写 domain")
+        with gptmail_web_domain_lock:
+            gptmail_web_domain_cache[cache_key] = (now + GPTMAIL_WEB_DOMAIN_CACHE_SECONDS, list(domains))
+        return domains
+
+    def _resolve_domains(self) -> list[str]:
+        if self.domain:
+            return list(self.domain)
+        if not self._resolved_domains:
+            self._resolved_domains = self._public_domains()
+        return list(self._resolved_domains)
+
+    def _build_address(self, username: str | None, domain: str) -> str:
+        if username and "@" in username:
+            return username.strip()
+        if username:
+            local_part = username.strip()
+        elif self.email_prefix:
+            local_part = f"{self.email_prefix}_{''.join(random.choices(string.ascii_lowercase + string.digits, k=6))}"
+        else:
+            local_part = _random_mailbox_name()
+        return f"{local_part}@{domain}"
+
+    def _issue_inbox_token(self, address: str, *, include_emails: bool = False) -> tuple[str, dict[str, Any] | None, int | None]:
+        self._browser_verify()
+        payload: dict[str, Any] = {"email": address}
+        if include_emails:
+            payload["include_emails"] = True
+        data = self._request("POST", "/api/inbox-token", payload=payload, expected=(200,))
+        if not data.get("success"):
+            raise RuntimeError(f"GPTMail 网页直取获取收件箱凭据失败: {data.get('error') or data}")
+        auth = data.get("auth") if isinstance(data.get("auth"), dict) else {}
+        token = str(auth.get("token") or "").strip()
+        if not token:
+            raise RuntimeError("GPTMail 网页直取没有返回收件箱凭据")
+        body = data.get("data") if isinstance(data.get("data"), dict) else {}
+        inbox = body.get("inbox") if isinstance(body.get("inbox"), dict) else None
+        expires = _gptmail_int(auth.get("expires_at") or body.get("expires_at"))
+        return token, inbox, expires
+
+    @staticmethod
+    def _remember_token(mailbox: dict[str, Any], token: str, expires: int | None) -> None:
+        mailbox["inbox_token"] = str(token or "")
+        mailbox["token"] = str(token or "")
+        mailbox["_gptmail_web_token_expires"] = int(expires or 0)
+
+    @staticmethod
+    def _is_token_error(message: Any) -> bool:
+        text = str(message or "").lower()
+        return any(term in text for term in ("access denied", "token", "expired", "unauthorized", "not authorized"))
+
+    @staticmethod
+    def _is_domain_error(error: Exception) -> bool:
+        if isinstance(error, GptMailWebHttpError):
+            if error.status_code not in (400, 404, 422):
+                return False
+            return "domain" in error.body.lower()
+        text = str(error or "").lower()
+        return "unsupported email domain" in text or ("domain" in text and ("not supported" in text or "invalid" in text))
+
+    def create_mailbox(self, username: str | None = None) -> dict[str, Any]:
+        explicit_address = str(username or "").strip() if "@" in str(username or "") else ""
+        domains = self._resolve_domains()
+        attempts = 1 if explicit_address else min(len(domains), 3)
+        last_error = ""
+        for attempt in range(max(1, attempts)):
+            if explicit_address:
+                address = explicit_address
+            else:
+                domain = _next_domain(domains) if attempt == 0 else random.choice(domains)
+                address = self._build_address(username, domain)
+            try:
+                token, _, expires = self._issue_inbox_token(address)
+            except (GptMailWebHttpError, RuntimeError) as error:
+                last_error = str(error)
+                if explicit_address or attempts <= 1 or not self._is_domain_error(error):
+                    raise
+                continue
+            mailbox = {
+                "provider": self.name,
+                "provider_ref": self.provider_ref,
+                "address": address,
+            }
+            self._remember_token(mailbox, token, expires)
+            return mailbox
+        raise RuntimeError(last_error or "GPTMail 网页直取无法创建可用邮箱")
+
+    def get_existing_mailbox(self, email: str) -> dict[str, Any]:
+        address = str(email or "").strip()
+        if not address or "@" not in address:
+            raise RuntimeError("GPTMail 网页直取需要有效的邮箱地址")
+        return {"provider": self.name, "provider_ref": self.provider_ref, "address": address}
+
+    def _inbox_payload(self, mailbox: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        address = str(mailbox.get("address") or "").strip()
+        if not address:
+            raise RuntimeError("GPTMail 网页直取缺少 address")
+        self._browser_verify()
+        token = str(mailbox.get("inbox_token") or mailbox.get("token") or "").strip()
+        expires = _gptmail_int(mailbox.get("_gptmail_web_token_expires"))
+        if token and expires and time.time() >= expires - 30:
+            token = ""
+
+        def issue_and_use_inbox() -> tuple[dict[str, Any], str]:
+            issued_token, inbox, issued_expires = self._issue_inbox_token(address, include_emails=True)
+            self._remember_token(mailbox, issued_token, issued_expires)
+            if isinstance(inbox, dict):
+                return inbox, issued_token
+            return {}, issued_token
+
+        if not token:
+            inbox, token = issue_and_use_inbox()
+            if inbox:
+                return inbox, token
+
+        data = self._request(
+            "GET",
+            "/api/emails",
+            params={"email": address},
+            headers={"x-inbox-token": token},
+            expected=(200, 401, 403),
+        )
+        if data.get("success"):
+            body = data.get("data") if isinstance(data.get("data"), dict) else {}
+            return body, token
+        if self._is_token_error(data.get("error")):
+            inbox, token = issue_and_use_inbox()
+            if inbox:
+                return inbox, token
+            data = self._request(
+                "GET",
+                "/api/emails",
+                params={"email": address},
+                headers={"x-inbox-token": token},
+                expected=(200, 401, 403),
+            )
+            if data.get("success"):
+                body = data.get("data") if isinstance(data.get("data"), dict) else {}
+                return body, token
+        raise RuntimeError(f"GPTMail 网页直取读取邮件失败: {data.get('error') or data}")
+
+    @staticmethod
+    def _latest_item(emails: list[dict[str, Any]]) -> dict[str, Any]:
+        def sort_key(item: dict[str, Any]) -> tuple[float, str]:
+            received = _parse_received_at(
+                item.get("timestamp") or item.get("created_at") or item.get("received_at") or item.get("date")
+            ) or datetime.fromtimestamp(0, tz=timezone.utc)
+            return received.timestamp(), str(item.get("id") or item.get("message_id") or "")
+
+        return max(emails, key=sort_key)
+
+    def _normalize_message(self, mailbox: dict[str, Any], item: dict[str, Any], token: str) -> dict[str, Any]:
+        address = str(mailbox.get("address") or "").strip()
+        message_id = str(item.get("id") or item.get("message_id") or item.get("email_id") or "").strip()
+        cached = self._detail_cache.get(message_id)
+        if cached:
+            return cached
+
+        data = dict(item)
+        if message_id:
+            try:
+                detail = self._request(
+                    "GET",
+                    f"/api/email/{quote(message_id, safe='')}",
+                    params={"email": address, "include_raw": 0},
+                    headers={"x-inbox-token": token},
+                    expected=(200, 401, 403),
+                )
+                if detail.get("success") and isinstance(detail.get("data"), dict):
+                    data = {**item, **detail["data"]}
+            except Exception:
+                data = dict(item)
+
+        html_content = str(data.get("html_content") or data.get("html") or data.get("body_html") or "")
+        text_content = str(data.get("text_content") or data.get("text") or data.get("content") or data.get("body") or "")
+        if not text_content and not html_content and isinstance(data.get("raw_content"), str):
+            text_content, html_content = _extract_content({"raw": data.get("raw_content")})
+        if not html_content and text_content and re.search(r"<[a-zA-Z][^>]*>", text_content):
+            html_content = text_content
+        if not text_content and html_content:
+            text_content = re.sub(r"<[^>]+>", " ", html_content)
+        verification_code = str(data.get("verification_code") or data.get("verificationCode") or "").strip()
+        if verification_code:
+            text_content = f"{text_content}\nVerification code: {verification_code}".strip()
+
+        sender = data.get("from_address") or data.get("from") or data.get("sender") or ""
+        if isinstance(sender, dict):
+            sender = sender.get("address") or sender.get("email") or sender.get("name") or ""
+        normalized = {
+            "provider": self.name,
+            "mailbox": address,
+            "message_id": message_id,
+            "subject": str(data.get("subject") or ""),
+            "sender": str(sender),
+            "to": data.get("email_address") or data.get("to") or address,
+            "text_content": text_content,
+            "html_content": html_content,
+            "received_at": _parse_received_at(
+                data.get("timestamp") or data.get("created_at") or data.get("received_at") or data.get("date")
+            ),
+            "raw": data,
+        }
+        if message_id:
+            self._detail_cache[message_id] = normalized
+            while len(self._detail_cache) > 50:
+                self._detail_cache.pop(next(iter(self._detail_cache)))
+        return normalized
+
+    def fetch_latest_message(self, mailbox: dict[str, Any]) -> dict[str, Any] | None:
+        inbox, token = self._inbox_payload(mailbox)
+        raw_items = inbox.get("emails") if isinstance(inbox.get("emails"), list) else []
+        emails = [item for item in raw_items if isinstance(item, dict)]
+        if not emails:
+            return None
+        return self._normalize_message(mailbox, self._latest_item(emails), token)
 
     def close(self) -> None:
         self.session.close()
@@ -2154,6 +2506,8 @@ def _create_provider(mail_config: dict, provider: str = "", provider_ref: str = 
         return DuckMailProvider(entry, conf)
     if entry["type"] == "gptmail":
         return GptMailProvider(entry, conf)
+    if entry["type"] in {"gptmail_web", "gptmail_http"}:
+        return GptMailWebProvider(entry, conf)
     if entry["type"] in {"donemail", "done_mail"}:
         return DoneMailProvider(entry, conf)
     if entry["type"] == "moemail":

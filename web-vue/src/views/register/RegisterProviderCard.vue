@@ -137,7 +137,7 @@
           />
         </label>
 
-        <label v-if="currentType === 'cloudmail_gen' || currentType === 'donemail'" class="register-field">
+        <label v-if="currentType === 'cloudmail_gen' || currentType === 'donemail' || currentType === 'gptmail_web'" class="register-field">
           <span class="register-label">邮箱前缀</span>
           <Input
             :model-value="provider.email_prefix"
@@ -286,6 +286,9 @@
           </Checkbox>
         </label>
       </div>
+      <p v-if="currentType === 'gptmail_web'" class="register-preview-line">
+        无需 API Key：使用 GPTMail 网页端 HTTP 链路获取收件箱；域名留空时自动获取站点当前可用公开域名。
+      </p>
     </div>
 
     <div v-if="currentType === 'gptmail'" class="register-provider-section register-provider-section--soft">
