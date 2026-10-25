@@ -39,9 +39,6 @@ export type RegisterProvider = {
   key_mode?: 'public' | 'custom' | string
   local_compose?: boolean
   email_prefix?: string
-  providers?: string[]
-  dot?: boolean
-  plus?: boolean
   subdomain?: string | string[]
   domain?: string[]
   cf_domain?: string[]

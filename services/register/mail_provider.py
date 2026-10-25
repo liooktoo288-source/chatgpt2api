@@ -300,10 +300,6 @@ GPTMAIL_WEB_DOMAIN_CACHE_SECONDS = 300
 gptmail_web_domain_lock = Lock()
 gptmail_web_domain_cache: dict[str, tuple[float, list[str]]] = {}
 
-TEMPTF_DEFAULT_API_BASE = "https://temp.tf"
-TEMPTF_DEFAULT_PROVIDERS = ("outlook", "hotmail", "gmail", "high.edu.pl")
-TEMPTF_ALLOWED_PROVIDERS = frozenset(TEMPTF_DEFAULT_PROVIDERS)
-
 
 def _config(mail_config: dict) -> dict:
     return {
@@ -343,21 +339,6 @@ def _normalize_string_list(value: Any) -> list[str]:
     return [text] if text else []
 
 
-def _normalize_temp_tf_providers(value: Any) -> list[str]:
-    if isinstance(value, list):
-        raw = value
-    else:
-        raw = re.split(r"[\s,]+", str(value or "").strip())
-    providers: list[str] = []
-    for item in raw:
-        name = str(item or "").strip().lower()
-        if name in {"edu", "high.edu", "high_edu_pl"}:
-            name = "high.edu.pl"
-        if name in TEMPTF_ALLOWED_PROVIDERS and name not in providers:
-            providers.append(name)
-    return providers or list(TEMPTF_DEFAULT_PROVIDERS)
-
-
 def _create_session(conf: dict):
     proxy = str(conf.get("proxy") or "").strip()
     kwargs = proxy_settings.build_session_kwargs(
@@ -387,11 +368,6 @@ def _gptmail_api_base(entry: dict) -> str:
 def _gptmail_web_api_base(entry: dict) -> str:
     value = str(entry.get("api_base") or "").strip()
     return (value or GPTMAIL_WEB_DEFAULT_API_BASE).rstrip("/")
-
-
-def _temp_tf_api_base(entry: dict) -> str:
-    value = str(entry.get("api_base") or "").strip()
-    return (value or TEMPTF_DEFAULT_API_BASE).rstrip("/")
 
 
 def _gptmail_key_mode(entry: dict) -> str:
@@ -1590,158 +1566,6 @@ class GptMailWebProvider(BaseMailProvider):
         self.session.close()
 
 
-class TempTfProvider(BaseMailProvider):
-    """temp.tf 临时邮箱：通过站点公开 HTTP 接口生成别名并轮询收件箱。"""
-
-    name = "temp_tf"
-
-    def __init__(self, entry: dict, conf: dict):
-        super().__init__(conf, str(entry.get("provider_ref") or ""))
-        self.api_base = _temp_tf_api_base(entry)
-        self.providers = _normalize_temp_tf_providers(entry.get("providers") or entry.get("provider"))
-        self.use_dot = _normalize_bool(entry.get("dot"), True)
-        self.use_plus = _normalize_bool(entry.get("plus"), True)
-        if self.providers == ["high.edu.pl"]:
-            self.use_dot = False
-            self.use_plus = False
-        elif not self.use_dot and not self.use_plus:
-            self.use_plus = True
-        self.session = _create_session(conf)
-        self.session.headers.update({
-            "User-Agent": conf["user_agent"],
-            "Accept": "application/json",
-            "Origin": self.api_base,
-            "Referer": f"{self.api_base}/",
-        })
-
-    def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        params: dict | None = None,
-        payload: dict | None = None,
-        attempts: int = 3,
-    ) -> Any:
-        last_error = ""
-        for attempt in range(max(1, attempts)):
-            try:
-                resp = self.session.request(
-                    method.upper(),
-                    f"{self.api_base}{path}",
-                    params=params,
-                    json=payload,
-                    timeout=self.conf["request_timeout"],
-                    verify=False,
-                )
-            except Exception as exc:
-                last_error = f"temp.tf 请求异常: {method.upper()} {path}, error={exc}"
-            else:
-                if resp.status_code == 200:
-                    try:
-                        data = resp.json()
-                    except Exception as exc:
-                        raise RuntimeError(f"temp.tf 返回非 JSON: {method.upper()} {path}, body={resp.text[:300]}") from exc
-                    if not isinstance(data, (dict, list)):
-                        raise RuntimeError(f"temp.tf 返回结构异常: {method.upper()} {path}")
-                    if isinstance(data, dict) and data.get("error"):
-                        raise RuntimeError(f"temp.tf 返回错误: {data.get('error')}")
-                    return data
-                last_error = f"temp.tf 请求失败: {method.upper()} {path}, HTTP {resp.status_code}, body={resp.text[:300]}"
-                if resp.status_code == 429 or resp.status_code >= 500:
-                    if attempt < attempts - 1:
-                        time.sleep(min(_retry_after_seconds(resp, 1.0 + attempt), 10.0))
-                        continue
-                break
-        raise RuntimeError(last_error or f"temp.tf 请求失败: {method.upper()} {path}")
-
-    @staticmethod
-    def _is_address(value: str) -> bool:
-        local, sep, domain = str(value or "").strip().lower().partition("@")
-        if not sep or not local:
-            return False
-        return domain == "gmail.com" or domain == "high.edu.pl" or domain.startswith("outlook.") or domain.startswith("hotmail.")
-
-    def create_mailbox(self, username: str | None = None) -> dict[str, Any]:
-        explicit = str(username or "").strip().lower()
-        if explicit and "@" in explicit and self._is_address(explicit):
-            return {"provider": self.name, "provider_ref": self.provider_ref, "address": explicit}
-        data = self._request(
-            "GET",
-            "/api/account",
-            params={
-                "providers": ",".join(self.providers),
-                "dot": "1" if self.use_dot else "0",
-                "plus": "1" if self.use_plus else "0",
-            },
-        )
-        address = str(data.get("email") or "").strip().lower() if isinstance(data, dict) else ""
-        if not address or "@" not in address:
-            raise RuntimeError(f"temp.tf 未返回可用邮箱: {data}")
-        return {"provider": self.name, "provider_ref": self.provider_ref, "address": address}
-
-    def get_existing_mailbox(self, email: str) -> dict[str, Any]:
-        address = str(email or "").strip().lower()
-        if not address or not self._is_address(address):
-            raise RuntimeError("temp.tf 需要有效的 Gmail / Outlook / Hotmail / high.edu.pl 地址")
-        return {"provider": self.name, "provider_ref": self.provider_ref, "address": address}
-
-    @staticmethod
-    def _latest_item(messages: list[dict[str, Any]]) -> dict[str, Any]:
-        def sort_key(item: dict[str, Any]) -> tuple[float, str]:
-            received = _parse_received_at(
-                item.get("date") or item.get("timestamp") or item.get("created_at") or item.get("received_at")
-            ) or datetime.fromtimestamp(0, tz=timezone.utc)
-            return received.timestamp(), str(item.get("id") or "")
-
-        return max(messages, key=sort_key)
-
-    @staticmethod
-    def _normalize_message(mailbox: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
-        address = str(mailbox.get("address") or "").strip()
-        body = str(item.get("body") or item.get("content") or item.get("text") or "")
-        content_type = str(item.get("bodyContentType") or item.get("contentType") or "").strip().lower()
-        html_content = ""
-        text_content = body
-        if "html" in content_type or (not content_type and re.search(r"<[a-zA-Z][^>]*>", body)):
-            html_content = body
-            text_content = re.sub(r"<[^>]+>", " ", body)
-        elif not body:
-            html_content = str(item.get("html") or "")
-            text_content = str(item.get("text") or item.get("content") or "")
-        sender = item.get("from") or item.get("from_address") or item.get("sender") or ""
-        if isinstance(sender, dict):
-            sender = sender.get("address") or sender.get("email") or sender.get("name") or ""
-        return {
-            "provider": TempTfProvider.name,
-            "mailbox": address,
-            "message_id": str(item.get("id") or ""),
-            "subject": str(item.get("subject") or ""),
-            "sender": str(sender),
-            "to": item.get("to") or address,
-            "text_content": text_content,
-            "html_content": html_content,
-            "received_at": _parse_received_at(
-                item.get("date") or item.get("timestamp") or item.get("created_at") or item.get("received_at")
-            ),
-            "raw": item,
-        }
-
-    def fetch_latest_message(self, mailbox: dict[str, Any]) -> dict[str, Any] | None:
-        address = str(mailbox.get("address") or "").strip()
-        if not address:
-            raise RuntimeError("temp.tf 缺少 address")
-        data = self._request("POST", "/api/check", payload={"email": address, "wait": False})
-        raw = data.get("data") if isinstance(data, dict) else data
-        messages = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
-        if not messages:
-            return None
-        return self._normalize_message(mailbox, self._latest_item(messages))
-
-    def close(self) -> None:
-        self.session.close()
-
-
 class DoneMailProvider(BaseMailProvider):
     name = "donemail"
 
@@ -2684,8 +2508,6 @@ def _create_provider(mail_config: dict, provider: str = "", provider_ref: str = 
         return GptMailProvider(entry, conf)
     if entry["type"] in {"gptmail_web", "gptmail_http"}:
         return GptMailWebProvider(entry, conf)
-    if entry["type"] in {"temp_tf", "temptf"}:
-        return TempTfProvider(entry, conf)
     if entry["type"] in {"donemail", "done_mail"}:
         return DoneMailProvider(entry, conf)
     if entry["type"] == "moemail":
