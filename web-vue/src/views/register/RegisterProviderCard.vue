@@ -294,40 +294,47 @@
     <div v-if="currentType === 'temp_tf'" class="register-provider-section register-provider-section--soft">
       <div class="register-provider-section-title">temp.tf 配置</div>
       <div class="register-provider-stack">
-        <label class="register-field">
-          <span class="register-label">邮件提供商</span>
-          <textarea
-            class="register-textarea"
-            :disabled="disabled"
-            placeholder="outlook, hotmail, gmail, high.edu.pl"
-            :value="arrayText(provider.providers)"
-            @input="emit('update-array', index, 'providers', ($event.target as HTMLTextAreaElement).value)"
-          ></textarea>
-        </label>
+        <div class="register-field">
+          <span class="register-label">提供者</span>
+          <div class="register-form-grid register-form-grid--two">
+            <label v-for="option in tempTfProviderOptions" :key="option.value" class="register-checkbox-field">
+              <Checkbox
+                :model-value="tempTfProviderChecked(option.value)"
+                :disabled="disabled"
+                @update:model-value="value => toggleTempTfProvider(option.value, Boolean(value))"
+              >
+                {{ option.label }}
+              </Checkbox>
+            </label>
+          </div>
+        </div>
 
-        <div class="register-form-grid register-form-grid--two">
-          <label class="register-checkbox-field">
-            <Checkbox
-              :model-value="provider.dot !== false"
-              :disabled="disabled"
-              @update:model-value="value => emit('update-field', index, 'dot', Boolean(value))"
-            >
-              Dot 别名（仅 Gmail）
-            </Checkbox>
-          </label>
-          <label class="register-checkbox-field">
-            <Checkbox
-              :model-value="provider.plus !== false"
-              :disabled="disabled"
-              @update:model-value="value => emit('update-field', index, 'plus', Boolean(value))"
-            >
-              Plus 别名
-            </Checkbox>
-          </label>
+        <div class="register-field">
+          <span class="register-label">语法</span>
+          <div class="register-form-grid register-form-grid--two">
+            <label class="register-checkbox-field">
+              <Checkbox
+                :model-value="provider.dot !== false"
+                :disabled="disabled || tempTfOnlyEdu"
+                @update:model-value="value => emit('update-field', index, 'dot', Boolean(value))"
+              >
+                点（Dot）
+              </Checkbox>
+            </label>
+            <label class="register-checkbox-field">
+              <Checkbox
+                :model-value="provider.plus !== false"
+                :disabled="disabled || tempTfOnlyEdu"
+                @update:model-value="value => emit('update-field', index, 'plus', Boolean(value))"
+              >
+                加（Plus）
+              </Checkbox>
+            </label>
+          </div>
         </div>
 
         <p class="register-preview-line">
-          每行或用逗号分隔一个提供商：outlook、hotmail、gmail、high.edu.pl；仅选 high.edu.pl 时会自动关闭 Dot/Plus。
+          点只对 Gmail 生效；加为 plus 别名。仅选 high.edu.pl 时语法会自动关闭。
         </p>
       </div>
     </div>
@@ -578,7 +585,14 @@ import {
 } from '@/views/register/registerProviderView'
 
 type MetaChipTone = 'default' | 'muted' | 'success' | 'warning' | 'danger' | 'info'
-type ProviderArrayKey = 'domain' | 'subdomain' | 'providers'
+type ProviderArrayKey = 'domain' | 'subdomain'
+
+const tempTfProviderOptions = [
+  { value: 'outlook', label: 'outlook.com' },
+  { value: 'hotmail', label: 'hotmail.com' },
+  { value: 'gmail', label: 'gmail.com' },
+  { value: 'high.edu.pl', label: 'high.edu.pl' },
+] as const
 
 type GptMailUiRuntime = {
   statusByIndex: (index: number) => GptMailStatus | null | undefined
@@ -612,6 +626,34 @@ const emit = defineEmits<{
 const currentType = computed(() => providerType(props.provider))
 const requirementMessages = computed(() => providerRequirementMessages(props.provider))
 const outlookSummary = computed(() => outlookPoolSummary(props.provider))
+
+const tempTfProviders = computed(() => {
+  const value = props.provider.providers
+  if (Array.isArray(value)) return value.map(String)
+  if (typeof value === 'string') {
+    return value.split(/[\n,]/).map(item => item.trim()).filter(Boolean)
+  }
+  return []
+})
+const tempTfOnlyEdu = computed(() => tempTfProviders.value.length === 1 && tempTfProviders.value[0] === 'high.edu.pl')
+
+function tempTfProviderChecked(value: string) {
+  return tempTfProviders.value.includes(value)
+}
+
+function toggleTempTfProvider(value: string, checked: boolean) {
+  const next = new Set(tempTfProviders.value)
+  if (checked) next.add(value)
+  else next.delete(value)
+  const ordered = tempTfProviderOptions.map(item => item.value).filter(item => next.has(item))
+  emit('update-field', props.index, 'providers', ordered)
+  if (ordered.length === 1 && ordered[0] === 'high.edu.pl') {
+    emit('update-field', props.index, 'dot', false)
+    emit('update-field', props.index, 'plus', false)
+  } else if (ordered.length > 0 && props.provider.dot === false && props.provider.plus === false) {
+    emit('update-field', props.index, 'plus', true)
+  }
+}
 
 function numberModelValue(value: unknown) {
   const parsed = Number.parseFloat(String(value))

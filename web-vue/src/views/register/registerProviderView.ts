@@ -458,7 +458,7 @@ export function providerRequirementMessages(provider: RegisterProvider) {
       if (provider.local_compose) requireValue(provider.default_domain, '默认域名')
       break
     case 'temp_tf':
-      requireList(provider.providers, '邮件提供商')
+      requireList(provider.providers, '提供者')
       break
     case 'donemail':
       requireValue(provider.api_base, 'DoneMail URL')
